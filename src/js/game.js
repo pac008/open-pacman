@@ -18,6 +18,12 @@ const GHOST_SPEED = 0.1;    // 1/10 celda/frame
 const GHOST_RELEASE_DELAY = 1000; // ms entre salidas de la pen
 const AMBUSH_LEAD = 4;            // celdas de anticipacion del ambusher
 
+const POWER_PELLET_SCORE = 50;
+const FRIGHTENED_DURATION = 7000; // ms de susto por power pellet
+const FRIGHTENED_BLINK = 2000;    // ms finales de parpadeo blanco
+const GHOST_CHAIN_SCORES = [ 200, 400, 800, 1600 ];
+const GHOST_EAT_RESPAWN_DELAY = 1000; // ms hasta que el fantasma comido sale
+
 // Crea una partida nueva. Copia MAZE (pristino) a game.grid para poder comer
 // dots sin destruir el original, y reiniciar.
 function createGame() {
@@ -26,7 +32,7 @@ function createGame() {
   grid[ PACMAN_START.y ][ PACMAN_START.x ] = 0;
 
   let dots = 0;
-  for ( const row of grid ) for ( const v of row ) if ( v === 2 ) dots++;
+  for ( const row of grid ) for ( const v of row ) if ( v === 2 || v === 4 ) dots++;
 
   return {
     state: 'start',
@@ -34,6 +40,8 @@ function createGame() {
     lives: 3,
     dotsRemaining: dots,
     elapsed: 0,
+    frightenedUntil: 0, // ms absolutos de game.elapsed; 0 = inactivo
+    ghostChain: 0,      // fantasmas comidos en el susto actual
     grid,
     pacman: {
       x: PACMAN_START.x,
@@ -195,11 +203,18 @@ function movePacman( game ) {
       p.dir = p.nextDir;
       p.nextDir = null;
     }
-    // Comer dot.
-    if ( grid[ p.y ][ p.x ] === 2 ) {
+    // Comer dot o power pellet.
+    const tile = grid[ p.y ][ p.x ];
+    if ( tile === 2 ) {
       grid[ p.y ][ p.x ] = 0;
       game.score += 10;
       game.dotsRemaining--;
+    } else if ( tile === 4 ) {
+      grid[ p.y ][ p.x ] = 0;
+      game.score += POWER_PELLET_SCORE;
+      game.dotsRemaining--;
+      game.frightenedUntil = game.elapsed + FRIGHTENED_DURATION;
+      game.ghostChain = 0;
     }
     // Si no puede seguir, se detiene en la celda.
     if ( !canMove( grid, p.x, p.y, p.dir, 'pacman' ) ) return;
