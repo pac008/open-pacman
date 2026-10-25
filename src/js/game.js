@@ -355,11 +355,14 @@ function resetPositions( game ) {
   p.dir = 'left';
   p.nextDir = null;
   game.elapsed = 0;
+  game.frightenedUntil = 0;
+  game.ghostChain = 0;
   game.ghosts.forEach( ( g, i ) => {
     g.x = GHOST_STARTS[ i ].x;
     g.y = GHOST_STARTS[ i ].y;
     g.dir = 'up';
     g.inPen = true;
+    g.releaseAt = i * GHOST_RELEASE_DELAY;
   } );
 }
 
@@ -379,8 +382,17 @@ function eatGhost( game, g ) {
   g.releaseAt = game.elapsed + GHOST_EAT_RESPAWN_DELAY;
 }
 
+// Fin del susto: desactiva el temporizador y reinicia la cadena de puntos.
+function expireFright( game ) {
+  if ( game.frightenedUntil !== 0 && game.frightenedUntil <= game.elapsed ) {
+    game.frightenedUntil = 0;
+    game.ghostChain = 0;
+  }
+}
+
 function update( game, dt = 0 ) {
   game.elapsed += dt;
+  expireFright( game );
   movePacman( game );
   game.ghosts.forEach( ( g ) => moveGhost( game, g ) );
 
