@@ -5,6 +5,11 @@ const TILE = 20;
 const WALL_COLOR = '#2121ff';
 const DOOR_COLOR = '#ffb8ff';
 const DOT_COLOR = '#ffb897';
+const POWER_PELLET_RADIUS = 6;
+const DOT_RADIUS = 2.5;
+const FRIGHTENED_COLOR = '#2121ff';
+const FRIGHTENED_BLINK_COLOR = '#ffffff';
+const FRIGHTENED_BLINK_INTERVAL = 250;
 
 function cellCenter( x, y ) {
   return { cx: x * TILE + TILE / 2, cy: y * TILE + TILE / 2 };
@@ -70,10 +75,12 @@ function drawDots( ctx, grid ) {
   ctx.fillStyle = DOT_COLOR;
   for ( let y = 0; y < grid.length; y++ ) {
     for ( let x = 0; x < grid[ 0 ].length; x++ ) {
-      if ( grid[ y ][ x ] !== 2 ) continue;
+      const tile = grid[ y ][ x ];
+      if ( tile !== 2 && tile !== 4 ) continue;
       const { cx, cy } = cellCenter( x, y );
+      const radius = tile === 4 ? POWER_PELLET_RADIUS : DOT_RADIUS;
       ctx.beginPath();
-      ctx.arc( cx, cy, 2.5, 0, Math.PI * 2 );
+      ctx.arc( cx, cy, radius, 0, Math.PI * 2 );
       ctx.fill();
     }
   }
@@ -151,6 +158,15 @@ const GHOST_COLORS = {
   scavenger: '#ffb852',
 };
 
+// Azul durante el susto; en los ultimos 2 s alterna blanco cada 250 ms.
+function ghostColor( game, g ) {
+  if ( !isFrightened( game ) ) return GHOST_COLORS[ g.kind ] || '#ff0000';
+  const remaining = game.frightenedUntil - game.elapsed;
+  if ( remaining > FRIGHTENED_BLINK ) return FRIGHTENED_COLOR;
+  const phase = Math.floor( remaining / FRIGHTENED_BLINK_INTERVAL );
+  return phase % 2 === 1 ? FRIGHTENED_BLINK_COLOR : FRIGHTENED_COLOR;
+}
+
 function draw( ctx, game, frame ) {
   const grid = game.grid;
   const W = grid[ 0 ].length;
@@ -163,7 +179,7 @@ function draw( ctx, game, frame ) {
   drawDoor( ctx, grid );
   drawDots( ctx, grid );
   drawPacman( ctx, game.pacman, frame );
-  game.ghosts.forEach( ( g ) => drawGhost( ctx, g, GHOST_COLORS[ g.kind ] || '#ff0000' ) );
+  game.ghosts.forEach( ( g ) => drawGhost( ctx, g, ghostColor( game, g ) ) );
   drawHUD( ctx, game, W );
 }
 
