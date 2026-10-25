@@ -9,9 +9,14 @@ const DIRS = {
   down: { x: 0, y: 1 },
 };
 const OPPOSITE = { left: 'right', right: 'left', up: 'down', down: 'up' };
+// Orden de desempate determinista al comparar distancias.
+const DIR_ORDER = [ 'up', 'left', 'down', 'right' ];
 
 const PACMAN_SPEED = 0.125; // 1/8 celda/frame -> alinea cada 8 frames
 const GHOST_SPEED = 0.1;    // 1/10 celda/frame
+
+const GHOST_RELEASE_DELAY = 1000; // ms entre salidas de la pen
+const AMBUSH_LEAD = 4;            // celdas de anticipacion del ambusher
 
 // Crea una partida nueva. Copia MAZE (pristino) a game.grid para poder comer
 // dots sin destruir el original, y reiniciar.
@@ -28,6 +33,7 @@ function createGame() {
     score: 0,
     lives: 3,
     dotsRemaining: dots,
+    elapsed: 0,
     grid,
     pacman: {
       x: PACMAN_START.x,
@@ -36,12 +42,16 @@ function createGame() {
       nextDir: null,
       speed: PACMAN_SPEED,
     },
-    ghosts: GHOST_STARTS.map( ( g ) => ( {
+    ghosts: GHOST_STARTS.map( ( g, i ) => ( {
       x: g.x,
       y: g.y,
+      startX: g.x,
+      startY: g.y,
       dir: 'up',
       speed: GHOST_SPEED,
       kind: g.kind,
+      releaseAt: i * GHOST_RELEASE_DELAY,
+      inPen: true,
     } ) ),
   };
 }
@@ -62,6 +72,19 @@ function isWall( grid, x, y, actor ) {
   return false;
 }
 
+// Celda vecina en la direccion dada, aplicando el wrap del tunel.
+function neighbor( grid, x, y, dir ) {
+  const d = DIRS[ dir ];
+  const width = grid[ 0 ].length;
+  let nx = x + d.x;
+  const ny = y + d.y;
+  if ( ny === TUNNEL_ROW ) {
+    if ( nx < 0 ) nx += width;
+    else if ( nx >= width ) nx -= width;
+  }
+  return { x: nx, y: ny };
+}
+
 // Puede el actor avanzar desde (x,y) en la direccion dir?
 function canMove( grid, x, y, dir, actor ) {
   const d = DIRS[ dir ];
@@ -79,6 +102,84 @@ function wrapTunnel( a, width ) {
     else if ( a.x >= width ) a.x -= width;
   }
 }
+
+// BFS multi-fuente sobre celdas transitables para fantasmas.
+// Devuelve dist[y][x] con Infinity en celdas inalcanzables.
+function buildDistanceMap( grid, seeds ) {
+  const height = grid.length;
+  const width = grid[ 0 ].length;
+  const dist = Array.from( { length: height }, () => new Array( width ).fill( Infinity ) );
+  const queue = [];
+
+  for ( const seed of seeds ) {
+    const x = Math.round( seed.x );
+    const y = Math.round( seed.y );
+    if ( isWall( grid, x, y, 'ghost' ) ) continue;
+    if ( dist[ y ][ x ] === 0 ) continue;
+    dist[ y ][ x ] = 0;
+    queue.push( { x, y } );
+  }
+
+  for ( let head = 0; head < queue.length; head++ ) {
+    const cell = queue[ head ];
+    const next = dist[ cell.y ][ cell.x ] + 1;
+    for ( const dir of DIR_ORDER ) {
+      const n = neighbor( grid, cell.x, cell.y, dir );
+      if ( isWall( grid, n.x, n.y, 'ghost' ) ) continue;
+      if ( dist[ n.y ][ n.x ] <= next ) continue;
+      dist[ n.y ][ n.x ] = next;
+      queue.push( n );
+    }
+  }
+
+  return dist;
+}
+
+// Si el objetivo cae en pared o fuera del mapa, busca en anillos crecientes
+// la celda transitable mas cercana.
+function nearestOpenCell( grid, x, y ) {
+  const height = grid.length;
+  const width = grid[ 0 ].length;
+  const cx = Math.round( x );
+  const cy = Math.round( y );
+  if ( !isWall( grid, cx, cy, 'ghost' ) ) return { x: cx, y: cy };
+
+  const maxRing = Math.max( width, height );
+  for ( let ring = 1; ring <= maxRing; ring++ ) {
+    let best = null;
+    let bestDist = Infinity;
+    for ( let dy = -ring; dy <= ring; dy++ ) {
+      for ( let dx = -ring; dx <= ring; dx++ ) {
+        if ( Math.abs( dx ) !== ring && Math.abs( dy ) !== ring ) continue;
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if ( isWall( grid, nx, ny, 'ghost' ) ) continue;
+        const d = dx * dx + dy * dy;
+        if ( d < bestDist ) {
+          bestDist = d;
+          best = { x: nx, y: ny };
+        }
+      }
+    }
+    if ( best ) return best;
+  }
+
+  // Sin celdas transitables (no ocurre en este laberinto).
+  return { x: Math.max( 0, Math.min( width - 1, cx ) ), y: Math.max( 0, Math.min( height - 1, cy ) ) };
+}
+
+// Semillas justo fuera de la puerta: guian a los fantasmas fuera de la pen.
+function penExitSeeds( grid ) {
+  const seeds = [];
+  for ( let y = 0; y < grid.length; y++ ) {
+    for ( let x = 0; x < grid[ 0 ].length; x++ ) {
+      if ( grid[ y ][ x ] === 3 ) seeds.push( nearestOpenCell( grid, x, y - 1 ) );
+    }
+  }
+  return seeds;
+}
+
+const PEN_EXIT_MAP = buildDistanceMap( MAZE, penExitSeeds( MAZE ) );
 
 function movePacman( game ) {
   const p = game.pacman;
@@ -110,38 +211,97 @@ function movePacman( game ) {
   wrapTunnel( p, width );
 }
 
-function decideGhost( game, g ) {
+// Direcciones validas, sin retroceder salvo callejon sin salida.
+function ghostChoices( game, g ) {
+  const choices = DIR_ORDER.filter(
+    ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( game.grid, g.x, g.y, dir, 'ghost' )
+  );
+  return choices.length ? choices : [ OPPOSITE[ g.dir ] ];
+}
+
+function nearestByManhattan( game, g, choices ) {
+  const px = Math.round( game.pacman.x );
+  const py = Math.round( game.pacman.y );
+  let best = choices[ 0 ];
+  let bestDist = Infinity;
+  for ( const dir of choices ) {
+    const n = neighbor( game.grid, g.x, g.y, dir );
+    const dist = Math.abs( n.x - px ) + Math.abs( n.y - py );
+    if ( dist < bestDist ) {
+      bestDist = dist;
+      best = dir;
+    }
+  }
+  return best;
+}
+
+function chooseByDistance( game, g, distMap ) {
+  const choices = ghostChoices( game, g );
+  let best = null;
+  let bestDist = Infinity;
+  for ( const dir of choices ) {
+    const n = neighbor( game.grid, g.x, g.y, dir );
+    const value = distMap[ n.y ] ? distMap[ n.y ][ n.x ] : Infinity;
+    if ( value < bestDist ) {
+      bestDist = value;
+      best = dir;
+    }
+  }
+  // Sin valores utiles en el mapa: respaldo por heuristica Manhattan.
+  if ( best === null || bestDist === Infinity ) return nearestByManhattan( game, g, choices );
+  return best;
+}
+
+function randomDir( game, g ) {
+  const choices = ghostChoices( game, g );
+  return choices[ Math.floor( Math.random() * choices.length ) ];
+}
+
+// Mapa de distancias segun la estrategia del fantasma.
+function ghostTargetMap( game, g ) {
   const grid = game.grid;
   const p = game.pacman;
 
-  const options = Object.keys( DIRS ).filter(
-    ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, 'ghost' )
-  );
-  // Sin salida (callejon): permitir el giro de 180.
-  const choices = options.length ? options : [ '' + OPPOSITE[ g.dir ] ];
-
   if ( g.kind === 'hunter' ) {
-    const px = Math.round( p.x );
-    const py = Math.round( p.y );
-    let best = choices[ 0 ];
-    let bestDist = Infinity;
-    for ( const dir of choices ) {
-      const d = DIRS[ dir ];
-      const nx = g.x + d.x;
-      const ny = g.y + d.y;
-      const dist = Math.abs( nx - px ) + Math.abs( ny - py );
-      if ( dist < bestDist ) {
-        bestDist = dist;
-        best = dir;
+    return buildDistanceMap( grid, [ { x: Math.round( p.x ), y: Math.round( p.y ) } ] );
+  }
+
+  if ( g.kind === 'ambusher' ) {
+    const step = DIRS[ p.dir ];
+    const target = nearestOpenCell(
+      grid,
+      Math.round( p.x ) + step.x * AMBUSH_LEAD,
+      Math.round( p.y ) + step.y * AMBUSH_LEAD
+    );
+    return buildDistanceMap( grid, [ target ] );
+  }
+
+  if ( g.kind === 'scavenger' ) {
+    const seeds = [];
+    for ( let y = 0; y < grid.length; y++ ) {
+      for ( let x = 0; x < grid[ 0 ].length; x++ ) {
+        if ( grid[ y ][ x ] === 2 ) seeds.push( { x, y } );
       }
     }
-    g.dir = best;
-  } else {
-    g.dir = choices[ Math.floor( Math.random() * choices.length ) ];
+    if ( !seeds.length ) seeds.push( { x: g.startX, y: g.startY } );
+    return buildDistanceMap( grid, seeds );
   }
+
+  return null;
+}
+
+function decideGhost( game, g ) {
+  if ( g.kind === 'random' ) {
+    // Dentro de la pen sigue la salida para no quedarse atrapado.
+    g.dir = g.inPen ? chooseByDistance( game, g, PEN_EXIT_MAP ) : randomDir( game, g );
+    return;
+  }
+  g.dir = chooseByDistance( game, g, ghostTargetMap( game, g ) );
 }
 
 function moveGhost( game, g ) {
+  if ( game.elapsed < g.releaseAt ) return;
+
   const grid = game.grid;
   const width = grid[ 0 ].length;
 
@@ -156,6 +316,11 @@ function moveGhost( game, g ) {
   g.x += d.x * g.speed;
   g.y += d.y * g.speed;
   wrapTunnel( g, width );
+
+  // La pen solo se abandona por la puerta (hacia la fila 11).
+  if ( g.inPen && aligned( g.x ) && aligned( g.y ) && Math.round( g.y ) < 12 ) {
+    g.inPen = false;
+  }
 }
 
 function resetPositions( game ) {
@@ -164,10 +329,12 @@ function resetPositions( game ) {
   p.y = PACMAN_START.y;
   p.dir = 'left';
   p.nextDir = null;
+  game.elapsed = 0;
   game.ghosts.forEach( ( g, i ) => {
     g.x = GHOST_STARTS[ i ].x;
     g.y = GHOST_STARTS[ i ].y;
     g.dir = 'up';
+    g.inPen = true;
   } );
 }
 
@@ -175,7 +342,8 @@ function collides( a, b ) {
   return Math.abs( a.x - b.x ) < 0.5 && Math.abs( a.y - b.y ) < 0.5;
 }
 
-function update( game ) {
+function update( game, dt = 0 ) {
+  game.elapsed += dt;
   movePacman( game );
   game.ghosts.forEach( ( g ) => moveGhost( game, g ) );
 

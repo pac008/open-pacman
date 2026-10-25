@@ -39,10 +39,15 @@ function startGame() {
 
 if ( actionBtn ) actionBtn.addEventListener( 'click', startGame );
 
-function loop() {
+let lastTs = null;
+
+function loop( ts ) {
+  const dt = lastTs === null ? 0 : Math.min( ts - lastTs, 100 );
+  lastTs = ts;
+
   frame++;
   if ( game.state === 'playing' ) {
-    update( game );
+    update( game, dt );
     if ( game.state === 'won' ) showOverlay( 'GANASTE', 'win', 'Reiniciar' );
     else if ( game.state === 'lost' ) showOverlay( 'PERDISTE', 'lose', 'Reiniciar' );
   }
@@ -50,4 +55,4 @@ function loop() {
   requestAnimationFrame( loop );
 }
 
-loop();
+requestAnimationFrame( loop );
