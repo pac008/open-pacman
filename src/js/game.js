@@ -367,21 +367,36 @@ function collides( a, b ) {
   return Math.abs( a.x - b.x ) < 0.5 && Math.abs( a.y - b.y ) < 0.5;
 }
 
+// Fantasma comido: teletransporte a su celda inicial, espera y vuelve a salir.
+function eatGhost( game, g ) {
+  const index = Math.min( game.ghostChain, GHOST_CHAIN_SCORES.length - 1 );
+  game.score += GHOST_CHAIN_SCORES[ index ];
+  game.ghostChain++;
+  g.x = g.startX;
+  g.y = g.startY;
+  g.dir = 'up';
+  g.inPen = true;
+  g.releaseAt = game.elapsed + GHOST_EAT_RESPAWN_DELAY;
+}
+
 function update( game, dt = 0 ) {
   game.elapsed += dt;
   movePacman( game );
   game.ghosts.forEach( ( g ) => moveGhost( game, g ) );
 
   for ( const g of game.ghosts ) {
-    if ( collides( game.pacman, g ) ) {
-      game.lives--;
-      if ( game.lives <= 0 ) {
-        game.state = 'lost';
-        return;
-      }
-      resetPositions( game );
-      break;
+    if ( !collides( game.pacman, g ) ) continue;
+    if ( isFrightened( game ) ) {
+      eatGhost( game, g );
+      continue;
     }
+    game.lives--;
+    if ( game.lives <= 0 ) {
+      game.state = 'lost';
+      return;
+    }
+    resetPositions( game );
+    break;
   }
 
   if ( game.dotsRemaining <= 0 ) game.state = 'won';
