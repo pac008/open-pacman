@@ -272,6 +272,10 @@ function randomDir( game, g ) {
   return choices[ Math.floor( Math.random() * choices.length ) ];
 }
 
+function isFrightened( game ) {
+  return game.frightenedUntil > game.elapsed;
+}
+
 // Mapa de distancias segun la estrategia del fantasma.
 function ghostTargetMap( game, g ) {
   const grid = game.grid;
@@ -306,6 +310,12 @@ function ghostTargetMap( game, g ) {
 }
 
 function decideGhost( game, g ) {
+  const frightened = isFrightened( game );
+  // Atemorizados: salen de la pen si estan dentro; fuera, deambulan al azar.
+  if ( frightened ) {
+    g.dir = g.inPen ? chooseByDistance( game, g, PEN_EXIT_MAP ) : randomDir( game, g );
+    return;
+  }
   if ( g.kind === 'random' ) {
     // Dentro de la pen sigue la salida para no quedarse atrapado.
     g.dir = g.inPen ? chooseByDistance( game, g, PEN_EXIT_MAP ) : randomDir( game, g );
